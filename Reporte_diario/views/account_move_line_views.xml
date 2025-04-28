@@ -1,0 +1,40 @@
+<odoo>
+    <!-- Vista de árbol para el informe de Líneas de Asiento -->
+    <record id="view_account_move_line_report_tree" model="ir.ui.view">
+        <field name="name">account.move.line.report.tree</field>
+        <field name="model">account.move.line</field>
+        <field name="arch" type="xml">
+            <tree string="Reporte de Líneas de Asiento">
+                <field name="date" string="Fecha"/>
+                <field name="move_id" string="Comprobante"/>
+                <field name="account_id" string="Cuenta Contable"/>
+                <field name="journal_id" string="Diario Contable"/>
+                <field name="debit" string="Debe"/>
+                <field name="credit" string="Haber"/>
+                <field name="balance" string="Balance"/>
+                <field name="currency_id" string="Moneda"/>
+                <header>
+                    <button string="Imprimir PDF"
+                            type="object"
+                            class="btn-primary"
+                            icon="fa-print"
+                            name="action_print_pdf"/>
+                </header>
+            </tree>
+        </field>
+    </record>
+
+    <!-- Acción para abrir el informe -->
+    <record id="action_account_move_line_report" model="ir.actions.act_window">
+        <field name="name">Reporte de Líneas de Asiento</field>
+        <field name="res_model">account.move.line</field>
+        <field name="view_mode">tree</field>
+        <field name="view_id" ref="view_account_move_line_report_tree"/>
+        <field name="domain">[('move_id.state', '!=', 'draft')]</field> <!-- Filtrar solo las líneas no borrador -->
+    </record>
+
+    <!-- Menú en el módulo de Contabilidad -->
+    <menuitem id="menu_account_move_line_report" name="Reporte de Líneas de Asiento"
+              parent="account.menu_finance_reports" action="action_account_move_line_report"
+              sequence="10"/>
+</odoo>

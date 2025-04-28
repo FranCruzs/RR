@@ -1,0 +1,61 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<odoo>
+    <!-- Vista de árbol para proveedores morosos -->
+    <record id="view_morosidad_proveedor_tree" model="ir.ui.view">
+        <field name="name">morosidad.proveedor.tree</field>
+        <field name="model">morosidad.proveedor</field>
+        <field name="arch" type="xml">
+            <tree string="Proveedores Morosos" default_group_by="partner_id" default_order="importe_secundario asc" expand="1">
+                <header>
+                    <button name="action_export_to_excel" type="object" string="Exportar PDF" class="oe_highlight"/>
+                </header>
+                <field name="invoice_date" string="Fecha Comprobante"/>
+                <field name="dias_transcurridos" string="Días Transcurridos"/>
+                <field name="partner_id" string="Proveedor"/>
+                <field name="move_id" string="Comprobante"/>
+                <field name="currency_id" string="Moneda"/>
+                <field name="amount_total" string="Importe Principal" widget="string" options="{'currency_field': 'currency_id'}"/>
+                <field name="importe_secundario" string="Importe Sec. (Pesos)" sum="Total" widget="float"/>
+                <field name="invoice_date_due" string="Fecha Vto."/>
+                <field name="move_type" string="Tipo"/>
+                <field name="invoice_payment_term_id" string="Condicion Pago"/>
+                <field name="amount_residual" string="Saldo Pendiente" widget="monetary" options="{'currency_field': 'currency_id'}"/>
+                <field name="dias_mora" string="Días de Mora"/>
+                <field name="payment_state" string="Estado Pago"/>
+            </tree>
+        </field>
+    </record>
+
+    <!-- Acción de ventana para proveedores -->
+    <record id="action_morosidad_proveedor" model="ir.actions.act_window">
+        <field name="name">Proveedores Morosos</field>
+        <field name="res_model">morosidad.proveedor</field>
+        <field name="view_mode">tree,form</field>
+        <field name="domain">[('dias_mora_num','&gt;',0)]</field>
+        <field name="context">
+            {
+                'search_default_group_by_partner': 1,
+                'search_default_order_importe_secundario': 'asc',
+                'expand': 1
+            }
+        </field>
+        <field name="help" type="html">
+            <p class="o_view_nocontent_smiling_face">
+                No hay proveedores con pagos morosos.
+            </p>
+        </field>
+    </record>
+
+    <!-- Menú principal en Contabilidad -> Reportes -->
+    <menuitem id="menu_morosidad_proveedor_root" 
+              name="Morosidad Proveedores"
+              parent="account.menu_finance_reports"
+              sequence="15"/>
+              
+    <!-- Submenú para el reporte específico -->
+    <menuitem id="menu_morosidad_proveedor_report"
+              name="Reporte de Morosidad"
+              parent="menu_morosidad_proveedor_root"
+              action="action_morosidad_proveedor"
+              sequence="10"/>
+</odoo>

@@ -1,0 +1,18 @@
+<!-- tesoreria/reports/account_move_line_report.xml -->
+<odoo>
+    <record  id="action_account_move_line_pdf_report" model="ir.actions.report">
+    <field name="name">Reporte Diario</field>
+        <field name="model">account.move.line</field>
+        <field name="report_type">qweb-pdf</field>
+        <field name="print_report_name">'Recibo de Entrega - %s' % (object.name or '')</field>
+        <field name="report_name">tesorerias.account_move_line_report_template</field>
+        <field name="report_file">tesorerias.account_move_line_report_template</field>
+
+ </record>
+
+    
+</odoo>
+
+
+
+

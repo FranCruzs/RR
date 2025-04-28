@@ -1,0 +1,14 @@
+<odoo>
+    <menuitem 
+        id="menu_morosidad_root" 
+        name="Morosidad" 
+        parent="account.menu_finance_reports"
+        sequence="10"/>
+        
+    <menuitem 
+        id="menu_morosidad_report" 
+        name="Reporte de Morosidad" 
+        parent="menu_morosidad_root"
+        action="action_morosidad_cliente"
+        sequence="1"/>
+</odoo>

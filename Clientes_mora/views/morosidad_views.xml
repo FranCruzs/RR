@@ -1,0 +1,60 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<odoo>
+    <!-- Vista de árbol para clientes morosos -->
+    <record id="view_morosidad_cliente_tree" model="ir.ui.view">
+        <field name="name">morosidad.cliente.tree</field>
+        <field name="model">morosidad.cliente</field>
+        <field name="arch" type="xml">
+            <tree string="Clientes Morosos" default_group_by="partner_id" default_order="importe_secundario desc" expand="1">
+                <header>
+                    <button name="action_export_to_excel" type="object" string="Exportar a Excel" class="oe_highlight"/>
+                </header>
+                <!-- Campos básicos -->
+                <field name="partner_id" string="Cliente"/>
+                <field name="move_id" string="Factura"/>
+                <field name="invoice_date" string="Fecha Factura"/>
+                <field name="invoice_date_due" string="Fecha Vencimiento"/>
+                
+                <!-- Campos monetarios -->
+                <field name="currency_id" string="Moneda" />
+                <field name="amount_total" string="Imp ppal" readonly="1"/>
+                <field name="importe_secundario" string="Imp sec" sum="Total" widget="float"/>
+                <field name="amount_residual" string="Saldo Pendiente" widget="monetary" options="{'currency_field': 'currency_id'}"/>
+                
+                <!-- Campos de días -->
+                <field name="dias_mora" string="Días de Mora"/>
+                <field name="dias_transcurridos" string="Días Transcurridos"/>
+                
+                <!-- Otros campos -->
+                <field name="salesman_id" string="Vendedor"/>
+                <field name="invoice_payment_term_id" string="Condición de Pago"/>
+                <field name="payment_state" string="Estado Pago"/>
+            </tree>
+        </field>
+    </record>
+
+    <!-- Acción de ventana -->
+    <record id="action_morosidad_cliente" model="ir.actions.act_window">
+        <field name="name">Clientes Morosos</field>
+        <field name="res_model">morosidad.cliente</field>
+        <field name="view_mode">tree,form</field>
+        <field name="domain">[('dias_mora_num', '>', 0)]</field>
+        <field name="context">{
+            'search_default_group_by_partner': 1,
+            'search_default_order_importe_secundario': 'desc',
+            'expand': 1  <!-- Asegura que los grupos estén expandidos -->
+        }</field>
+        <field name="help" type="html">
+            <p class="o_view_nocontent_smiling_face">
+                No hay clientes con pagos morosos.
+            </p>
+        </field>
+    </record>
+
+    <!-- Menú -->
+    <menuitem id="menu_morosidad_report"
+              name="Reporte de Morosidad"
+              parent="account.menu_finance_reports"
+              action="action_morosidad_cliente"
+              sequence="10"/>
+</odoo>
