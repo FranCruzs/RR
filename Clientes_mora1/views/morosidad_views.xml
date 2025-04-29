@@ -41,11 +41,11 @@
         <field name="res_model">morosidad.cliente</field>
         <field name="view_mode">tree,form</field>
         <field name="domain">[('dias_mora_num', '>', 0)]</field>
-        <field name="context">{
-            'search_default_group_by_partner': 1,
-            'search_default_order_importe_secundario': 'desc',
-            'expand': 1  <!-- Asegura que los grupos estén expandidos -->
-        }</field>
+        <field name="context">{ 
+    'search_default_group_by_partner': True,
+    'search_default_order_importe_secundario': 'desc',
+    'expand': True
+}</field>
         <field name="help" type="html">
             <p class="o_view_nocontent_smiling_face">
                 No hay clientes con pagos morosos.
