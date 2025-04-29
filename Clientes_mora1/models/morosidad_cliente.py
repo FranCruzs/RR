@@ -8,7 +8,7 @@ from reportlab.lib.pagesizes import landscape, letter
 from reportlab.lib import colors
 from reportlab.lib.styles import getSampleStyleSheet
 from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer
-
+import xlsxwriter
 class MorosidadCliente(models.Model):
     _name = 'morosidad.cliente'
     _description = 'Reporte de Morosidad de Clientes'
@@ -73,8 +73,6 @@ class MorosidadCliente(models.Model):
                 END AS amount_total,
                 m.amount_total_signed AS importe_secundario,
                 m.amount_residual,
-                (CURRENT_DATE - m.invoice_date_due) AS dias_mora_num,
-                (CURRENT_DATE - m.invoice_date) AS dias_transcurridos_num,
                 m.invoice_user_id AS salesman_id,
                 m.invoice_payment_term_id
             FROM
@@ -85,7 +83,12 @@ class MorosidadCliente(models.Model):
                 m.payment_state IN ('not_paid', 'partial')
                 AND m.invoice_date_due < CURRENT_DATE
                 AND m.move_type = 'out_invoice'
-                AND m.state != 'draft'
+                AND m.state = 'posted'  -- Solo facturas validadas (posted)
+                AND NOT EXISTS (         -- Excluir facturas con pagos totales
+                    SELECT 1 FROM account_move_line l 
+                    WHERE l.move_id = m.id 
+                    AND l.full_reconcile_id IS NOT NULL
+                )
             ORDER BY m.amount_residual DESC
         """.format(table=self._table)
         self.env.cr.execute(query)
@@ -269,6 +272,192 @@ class MorosidadCliente(models.Model):
             'mimetype': 'application/pdf'
         })
     
+        return {
+            'type': 'ir.actions.act_url',
+            'url': '/web/content/%s?download=true' % attachment.id,
+            'target': 'self',
+        }
+
+
+    def action_export_to_excel(self):
+        """Genera un reporte Excel de clientes morosos ordenados por mayor deuda."""
+        records = self.search([])
+        
+        if not records:
+            raise UserError("No hay registros de morosidad para exportar.")
+        
+        # Crear buffer para el Excel
+        excel_buffer = io.BytesIO()
+        
+        # Crear libro de Excel
+        workbook = xlsxwriter.Workbook(excel_buffer, {
+            'in_memory': True,
+            'strings_to_numbers': True
+        })
+        
+        # Formato para encabezados
+        header_format = workbook.add_format({
+            'bold': True,
+            'font_color': 'white',
+            'bg_color': '#4472C4',
+            'align': 'center',
+            'valign': 'vcenter',
+            'border': 1,
+            'font_size': 10
+        })
+        
+        # Formato para datos
+        data_format = workbook.add_format({
+            'border': 1,
+            'align': 'center',
+            'valign': 'vcenter',
+            'font_size': 9
+        })
+        
+        # Formato para montos (alineación derecha)
+        amount_format = workbook.add_format({
+            'border': 1,
+            'align': 'right',
+            'valign': 'vcenter',
+            'font_size': 9,
+            'num_format': '#,##0.00'
+        })
+        
+        # Formato para totales
+        total_format = workbook.add_format({
+            'bold': True,
+            'border': 1,
+            'align': 'right',
+            'valign': 'vcenter',
+            'font_size': 9,
+            'num_format': '#,##0.00'
+        })
+        
+        # Crear hoja de cálculo
+        worksheet = workbook.add_worksheet('Morosidad Clientes')
+        
+        # Configurar anchos de columnas
+        worksheet.set_column('A:A', 20)  # Cliente
+        worksheet.set_column('B:B', 15)  # Factura
+        worksheet.set_column('C:C', 12)  # Fecha Factura
+        worksheet.set_column('D:D', 12)  # Fecha Vencimiento
+        worksheet.set_column('E:E', 10)  # Moneda
+        worksheet.set_column('F:F', 15)  # Importe Principal
+        worksheet.set_column('G:G', 15)  # Importe Secundario
+        worksheet.set_column('H:H', 15)  # Saldo Pendiente
+        worksheet.set_column('I:I', 12)  # Días de Mora
+        worksheet.set_column('J:J', 12)  # Días Transcurridos
+        worksheet.set_column('K:K', 20)  # Vendedor
+        worksheet.set_column('L:L', 20)  # Condición de Pago
+        
+        # Escribir título
+        today = fields.Date.context_today(self)
+        title = f"Reporte de Morosidad de Clientes - Generado el {today}"
+        worksheet.merge_range('A1:L1', title, workbook.add_format({
+            'bold': True,
+            'font_size': 14,
+            'align': 'center'
+        }))
+        
+        # Escribir encabezados
+        headers = [
+            'Cliente', 'Factura', 'F. Factura', 'F. Vencimiento',
+            'Moneda', 'Imp. Principal', 'Imp. Secundario (ARS)', 
+            'Saldo Pendiente', 'Días Mora', 'Días Transcurridos',
+            'Vendedor', 'Condición de Pago'
+        ]
+        
+        worksheet.write_row(2, 0, headers, header_format)
+        
+        # Agrupar registros por cliente y calcular total por cliente
+        client_totals = {}
+        for record in records:
+            if record.partner_id not in client_totals:
+                client_totals[record.partner_id] = {
+                    'records': [],
+                    'total': 0.0
+                }
+            client_totals[record.partner_id]['records'].append(record)
+            if record.importe_secundario:
+                client_totals[record.partner_id]['total'] += record.importe_secundario
+        
+        # Ordenar clientes por total de morosidad (de mayor a menor)
+        sorted_clients = sorted(client_totals.items(), 
+                              key=lambda x: x[1]['total'], 
+                              reverse=True)
+        
+        # Contador de fila (empezamos en la fila 3 porque 0-2 son para títulos y encabezados)
+        row = 3
+        
+        # Total general de morosidad
+        total_general = 0.0
+        
+        # Escribir datos para cada cliente
+        for partner, data in sorted_clients:
+            invoices = data['records']
+            cliente_mora = data['total']
+            total_general += cliente_mora
+            
+            # Escribir nombre del cliente (merge 12 columnas)
+            worksheet.merge_range(row, 0, row, 11, 
+                                 f"CLIENTE: {partner.name}", 
+                                 workbook.add_format({
+                                     'bold': True,
+                                     'bg_color': '#EFF2F7',
+                                     'border': 1
+                                 }))
+            row += 1
+            
+            # Escribir total morosidad del cliente
+            worksheet.write(row, 0, "Total Morosidad:", workbook.add_format({
+                'bold': True,
+                'align': 'right',
+                'border': 1
+            }))
+            worksheet.write(row, 6, cliente_mora, total_format)
+            row += 1
+            
+            # Escribir facturas del cliente
+            for record in invoices:
+                worksheet.write(row, 0, partner.name, data_format)
+                worksheet.write(row, 1, record.move_id.name or '', data_format)
+                worksheet.write(row, 2, record.invoice_date.strftime('%d/%m/%Y') if record.invoice_date else '', data_format)
+                worksheet.write(row, 3, record.invoice_date_due.strftime('%d/%m/%Y') if record.invoice_date_due else '', data_format)
+                worksheet.write(row, 4, record.currency_id.name or '', data_format)
+                worksheet.write(row, 5, record.amount_total or '', data_format)
+                worksheet.write(row, 6, record.importe_secundario or 0.0, amount_format)
+                worksheet.write(row, 7, record.amount_residual or 0.0, amount_format)
+                worksheet.write(row, 8, record.dias_mora_num or 0, data_format)
+                worksheet.write(row, 9, record.dias_transcurridos_num or 0, data_format)
+                worksheet.write(row, 10, record.salesman_id.name or '', data_format)
+                worksheet.write(row, 11, record.invoice_payment_term_id.name or '', data_format)
+                row += 1
+            
+            # Espacio entre clientes
+            row += 1
+        
+        # Escribir total general
+        worksheet.write(row, 0, "TOTAL GENERAL MOROSIDAD:", workbook.add_format({
+            'bold': True,
+            'align': 'right',
+            'border': 1
+        }))
+        worksheet.write(row, 6, total_general, total_format)
+        
+        # Cerrar libro de Excel
+        workbook.close()
+        excel_buffer.seek(0)
+        
+        # Crear attachment
+        attachment = self.env['ir.attachment'].create({
+            'name': 'Reporte_Morosidad_Clientes.xlsx',
+            'type': 'binary',
+            'datas': base64.b64encode(excel_buffer.read()),
+            'store_fname': 'Reporte_Morosidad_Clientes.xlsx',
+            'res_model': self._name,
+            'mimetype': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+        })
+        
         return {
             'type': 'ir.actions.act_url',
             'url': '/web/content/%s?download=true' % attachment.id,
