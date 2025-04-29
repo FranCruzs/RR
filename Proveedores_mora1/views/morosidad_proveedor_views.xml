@@ -8,6 +8,7 @@
             <tree string="Proveedores Morosos" default_group_by="partner_id" default_order="importe_secundario asc" expand="1">
                 <header>
                     <button name="action_export_to_excel" type="object" string="Exportar PDF" class="oe_highlight"/>
+                    <button name="action_export_to_excel_proveedores" string="Exportar a Excel" type="object" class="btn-primary"/>
                 </header>
                 <field name="invoice_date" string="Fecha Comprobante"/>
                 <field name="dias_transcurridos" string="Días Transcurridos"/>

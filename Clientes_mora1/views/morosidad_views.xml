@@ -7,7 +7,9 @@
         <field name="arch" type="xml">
             <tree string="Clientes Morosos" default_group_by="partner_id" default_order="importe_secundario desc" expand="1">
                 <header>
-                    <button name="action_export_to_excel" type="object" string="Exportar a Excel" class="oe_highlight"/>
+                    <button name="action_export_to_excel" type="object" string="Exportar PDF" class="oe_highlight"/>
+
+                    <button name="action_export_to_excel" string="Exportar a Excel" type="object" class="btn-primary"/>
                 </header>
                 <!-- Campos básicos -->
                 <field name="partner_id" string="Cliente"/>

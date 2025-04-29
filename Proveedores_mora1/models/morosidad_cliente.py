@@ -298,3 +298,198 @@ class MorosidadProveedor(models.Model):
             
         except Exception as e:
             raise UserError(f"Error al generar el reporte: {str(e)}")
+
+
+    def action_export_to_excel_proveedores(self):
+        """Genera un reporte Excel de proveedores morosos ordenados por mayor deuda."""
+        try:
+            # Obtener todos los registros
+            records = self.search([])
+            
+            if not records:
+                raise UserError("No hay registros de morosidad para exportar.")
+            
+            # Crear buffer para el Excel
+            excel_buffer = io.BytesIO()
+            
+            # Crear libro de Excel
+            workbook = xlsxwriter.Workbook(excel_buffer, {
+                'in_memory': True,
+                'strings_to_numbers': True
+            })
+            
+            # Formato para encabezados
+            header_format = workbook.add_format({
+                'bold': True,
+                'font_color': 'white',
+                'bg_color': '#4472C4',
+                'align': 'center',
+                'valign': 'vcenter',
+                'border': 1,
+                'font_size': 10
+            })
+            
+            # Formato para datos
+            data_format = workbook.add_format({
+                'border': 1,
+                'align': 'center',
+                'valign': 'vcenter',
+                'font_size': 9
+            })
+            
+            # Formato para montos (alineación derecha)
+            amount_format = workbook.add_format({
+                'border': 1,
+                'align': 'right',
+                'valign': 'vcenter',
+                'font_size': 9,
+                'num_format': '#,##0.00'
+            })
+            
+            # Formato para totales
+            total_format = workbook.add_format({
+                'bold': True,
+                'border': 1,
+                'align': 'right',
+                'valign': 'vcenter',
+                'font_size': 9,
+                'num_format': '#,##0.00'
+            })
+            
+            # Formato para títulos de proveedor
+            supplier_title_format = workbook.add_format({
+                'bold': True,
+                'bg_color': '#EFF2F7',
+                'border': 1,
+                'font_size': 10
+            })
+            
+            # Crear hoja de cálculo
+            worksheet = workbook.add_worksheet('Morosidad Proveedores')
+            
+            # Configurar anchos de columnas
+            worksheet.set_column('A:A', 25)  # Proveedor
+            worksheet.set_column('B:B', 15)  # Comprobante
+            worksheet.set_column('C:C', 12)  # Fecha Factura
+            worksheet.set_column('D:D', 12)  # Fecha Vencimiento
+            worksheet.set_column('E:E', 10)  # Moneda
+            worksheet.set_column('F:F', 15)  # Importe Principal
+            worksheet.set_column('G:G', 15)  # Importe Secundario (ARS)
+            worksheet.set_column('H:H', 12)  # Días de Mora
+            worksheet.set_column('I:I', 12)  # Días Transcurridos
+            worksheet.set_column('J:J', 20)  # Condición de Pago
+            
+            # Escribir título
+            today = fields.Date.context_today(self)
+            title = f"Reporte de Morosidad de Proveedores - Generado el {today.strftime('%d/%m/%Y')}"
+            worksheet.merge_range('A1:J1', title, workbook.add_format({
+                'bold': True,
+                'font_size': 14,
+                'align': 'center'
+            }))
+            
+            # Escribir encabezados (fila 2)
+            headers = [
+                'Proveedor', 'Comprobante', 'F. Factura', 'F. Vencimiento',
+                'Moneda', 'Imp. Principal', 'Imp. Secundario (ARS)', 
+                'Días Mora', 'Días Transcurridos', 'Condición de Pago'
+            ]
+            
+            worksheet.write_row(2, 0, headers, header_format)
+            
+            # Agrupar registros por proveedor y calcular total por proveedor
+            supplier_totals = {}
+            for record in records:
+                if record.partner_id not in supplier_totals:
+                    supplier_totals[record.partner_id] = {
+                        'name': record.partner_id.name or 'Sin Nombre',
+                        'records': [],
+                        'total': 0.0
+                    }
+                supplier_totals[record.partner_id]['records'].append(record)
+                if record.importe_secundario:
+                    supplier_totals[record.partner_id]['total'] += record.importe_secundario
+            
+            # Ordenar proveedores por total de morosidad (de MENOR a mayor)
+            sorted_suppliers = sorted(supplier_totals.items(), 
+                                    key=lambda x: x[1]['total'])  # Orden ascendente
+            
+            # Contador de fila (empezamos en la fila 3 porque 0-2 son para títulos y encabezados)
+            row = 3
+            
+            # Total general de morosidad
+            total_general = 0.0
+            
+            # Escribir datos para cada proveedor
+            for partner, data in sorted_suppliers:
+                invoices = data['records']
+                supplier_mora = data['total']
+                total_general += supplier_mora
+                
+                # Escribir nombre del proveedor (merge 10 columnas)
+                worksheet.merge_range(row, 0, row, 9, 
+                                    f"PROVEEDOR: {data['name']}", 
+                                    supplier_title_format)
+                row += 1
+                
+                # Escribir total morosidad del proveedor
+                worksheet.write(row, 0, "Total Morosidad:", workbook.add_format({
+                    'bold': True,
+                    'align': 'right',
+                    'border': 1
+                }))
+                worksheet.merge_range(row, 1, row, 5, "", data_format)  # Celdas vacías para alinear
+                worksheet.write(row, 6, supplier_mora, total_format)
+                row += 1
+                
+                # Escribir facturas del proveedor
+                for record in invoices:
+                    worksheet.write(row, 0, data['name'], data_format)
+                    worksheet.write(row, 1, record.move_id.name or '-', data_format)
+                    worksheet.write(row, 2, record.invoice_date.strftime('%d/%m/%Y') if record.invoice_date else '-', data_format)
+                    worksheet.write(row, 3, record.invoice_date_due.strftime('%d/%m/%Y') if record.invoice_date_due else '-', data_format)
+                    worksheet.write(row, 4, record.currency_id.name or '-', data_format)
+                    worksheet.write(row, 5, record.amount_total or '0.00', data_format)
+                    worksheet.write(row, 6, record.importe_secundario or 0.0, amount_format)
+                    worksheet.write(row, 7, record.dias_mora_num or 0, data_format)
+                    worksheet.write(row, 8, record.dias_transcurridos_num or 0, data_format)
+                    worksheet.write(row, 9, record.invoice_payment_term_id.name or '-', data_format)
+                    row += 1
+                
+                # Espacio entre proveedores
+                row += 1
+            
+            # Escribir total general
+            worksheet.write(row, 0, "TOTAL GENERAL MOROSIDAD:", workbook.add_format({
+                'bold': True,
+                'align': 'right',
+                'border': 1
+            }))
+            worksheet.merge_range(row, 1, row, 5, "", data_format)  # Celdas vacías para alinear
+            worksheet.write(row, 6, total_general, total_format)
+            
+            # Cerrar libro de Excel
+            workbook.close()
+            excel_buffer.seek(0)
+            
+            # Crear attachment con fecha en el nombre
+            today_str = fields.Date.context_today(self).strftime('%Y%m%d')
+            attachment = self.env['ir.attachment'].create({
+                'name': f'Reporte_Morosidad_Proveedores_{today_str}.xlsx',
+                'type': 'binary',
+                'datas': base64.b64encode(excel_buffer.read()),
+                'store_fname': f'Reporte_Morosidad_Proveedores_{today_str}.xlsx',
+                'res_model': self._name,
+                'mimetype': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+            })
+            
+            return {
+                'type': 'ir.actions.act_url',
+                'url': f'/web/content/{attachment.id}?download=true',
+                'target': 'self',
+            }
+            
+        except Exception as e:
+            raise UserError(f"Error al generar el reporte Excel: {str(e)}")
+
+
