@@ -93,7 +93,7 @@ class MorosidadCliente(models.Model):
         """.format(table=self._table)
         self.env.cr.execute(query)
         
-    def action_export_to_excel(self):
+    def action_export_to_pdf(self):
         """Genera un reporte PDF de clientes morosos ordenados por mayor deuda."""
         # Obtener todos los registros
         records = self.search([])
