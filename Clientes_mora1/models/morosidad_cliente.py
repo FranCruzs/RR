@@ -9,6 +9,14 @@ from reportlab.lib import colors
 from reportlab.lib.styles import getSampleStyleSheet
 from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer
 import xlsxwriter
+
+
+from odoo import models, fields, api, tools
+from datetime import date
+
+from odoo import models, fields, api, tools
+from datetime import date
+
 class MorosidadCliente(models.Model):
     _name = 'morosidad.cliente'
     _description = 'Reporte de Morosidad de Clientes'
@@ -20,7 +28,7 @@ class MorosidadCliente(models.Model):
     invoice_date_due = fields.Date(string='Fecha Vencimiento')
     currency_id = fields.Many2one('res.currency', string='Moneda')
     amount_total = fields.Char(string='Total Factura')
-    importe_secundario = fields.Monetary(string='Importe Secundario (Pesos)')
+    importe_secundario = fields.Monetary(string='Importe en Pesos')
     amount_residual = fields.Monetary(string='Saldo Pendiente', currency_field='currency_id')
     
     # Campos calculados para días
@@ -28,23 +36,39 @@ class MorosidadCliente(models.Model):
     dias_transcurridos_num = fields.Integer(compute='_compute_dias', store=False)
     dias_mora = fields.Char(string='Días de Mora', compute='_compute_dias', store=False)
     dias_transcurridos = fields.Char(string='Días Transcurridos', compute='_compute_dias', store=False)
+    esta_vencida = fields.Boolean(string='¿Está Vencida?', compute='_compute_dias', store=False)
     
     # Campos relacionados
     salesman_id = fields.Many2one('res.users', string='Vendedor')
     invoice_payment_term_id = fields.Many2one('account.payment.term', string='Condición de Pago')
-    payment_state = fields.Selection(related='move_id.payment_state', string='Estado Pago')
+    payment_state = fields.Selection([
+        ('not_paid', 'No Pagado'),
+        ('partial', 'Parcialmente Pagado'),
+        ('paid', 'Pagado'),
+        ('invoicing', 'Facturación'),
+        ('reversed', 'Revertido')], 
+        string='Estado de Pago')
 
     @api.depends('invoice_date', 'invoice_date_due')
     def _compute_dias(self):
         today = date.today()
         for record in self:
-            # Calcular días de mora
+            # Inicializar valores
+            record.dias_mora_num = 0
+            record.dias_mora = "No vencida"
+            record.esta_vencida = False
+            
+            # Calcular días de mora si está vencida
             if record.invoice_date_due:
                 dias_mora = (today - record.invoice_date_due).days
-                record.dias_mora_num = max(dias_mora, 0)
-                record.dias_mora = f"{record.dias_mora_num} días"
+                if dias_mora > 0:
+                    record.dias_mora_num = dias_mora
+                    record.dias_mora = f"{dias_mora} días"
+                    record.esta_vencida = True
+                else:
+                    record.dias_mora = f"Vence en {-dias_mora} días"
             
-            # Calcular días transcurridos
+            # Calcular días transcurridos desde emisión
             if record.invoice_date:
                 dias_transcurridos = (today - record.invoice_date).days
                 record.dias_transcurridos_num = dias_transcurridos
@@ -63,33 +87,42 @@ class MorosidadCliente(models.Model):
                 m.invoice_date,
                 m.invoice_date_due,
                 m.currency_id,
-                CASE 
-                    WHEN m.amount_total::numeric <> 0 THEN 
-                        REGEXP_REPLACE(
-                            TO_CHAR(m.amount_total::numeric, 'FM9,999,999,990.00'), 
-                            ',', '.', 'g'
-                        ) || ' -'
-                    ELSE '0,00 -'
-                END AS amount_total,
-                m.amount_total_signed AS importe_secundario,
-                m.amount_residual,
+                -- Importe formateado correctamente
+                REGEXP_REPLACE(
+                    TO_CHAR(
+                        CASE 
+                            WHEN m.move_type = 'out_refund' THEN -m.amount_total 
+                            ELSE m.amount_total 
+                        END, 
+                        'FM9,999,999,990.00'
+                    ), 
+                    ',', '.', 'g'
+                ) AS amount_total,
+                -- Importe en moneda secundaria (pesos)
+                CASE
+                    WHEN m.move_type = 'out_refund' THEN -m.amount_total_signed
+                    ELSE m.amount_total_signed
+                END AS importe_secundario,
+                -- Saldo pendiente
+                CASE
+                    WHEN m.move_type = 'out_refund' THEN -m.amount_residual
+                    ELSE m.amount_residual
+                END AS amount_residual,
                 m.invoice_user_id AS salesman_id,
-                m.invoice_payment_term_id
+                m.invoice_payment_term_id,
+                m.payment_state  -- Este campo estaba faltando en la consulta original
             FROM
                 account_move m
             JOIN
                 res_partner p ON m.partner_id = p.id
             WHERE
-                m.payment_state IN ('not_paid', 'partial')
-                AND m.invoice_date_due < CURRENT_DATE
-                AND m.move_type = 'out_invoice'
-                AND m.state = 'posted'  -- Solo facturas validadas (posted)
-                AND NOT EXISTS (         -- Excluir facturas con pagos totales
-                    SELECT 1 FROM account_move_line l 
-                    WHERE l.move_id = m.id 
-                    AND l.full_reconcile_id IS NOT NULL
-                )
-            ORDER BY m.amount_residual DESC
+                m.move_type IN ('out_invoice', 'out_refund')  -- Facturas y notas de crédito
+                AND m.state = 'posted'  -- Solo facturas validadas
+                AND (m.amount_residual > 0 OR m.payment_state IN ('not_paid', 'partial'))
+            ORDER BY 
+                CASE WHEN m.invoice_date_due IS NULL THEN 0 ELSE 1 END,
+                m.invoice_date_due,
+                m.amount_residual DESC
         """.format(table=self._table)
         self.env.cr.execute(query)
         
