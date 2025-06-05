@@ -1,0 +1,22 @@
+<odoo>
+    <record id="action_sale_order_history" model="ir.actions.act_window">
+        <field name="name">Historial de Órdenes de Venta</field>
+        <field name="res_model">sale.order.history</field>
+        <field name="view_mode">tree,form</field>
+        <field name="help" type="html">
+            <p class="o_view_nocontent_smiling_face">
+                Este es el historial de versiones de las órdenes de venta
+            </p>
+        </field>
+    </record>
+
+    <menuitem id="menu_sale_order_history_root" name="Historial Ventas" sequence="100"/>
+    
+    <menuitem 
+        id="menu_sale_order_history" 
+        name="Historial de Órdenes" 
+        parent="menu_sale_order_history_root" 
+        action="action_sale_order_history" 
+        sequence="10"
+    />
+</odoo>
