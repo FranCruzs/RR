@@ -18,6 +18,7 @@ class SaleOrderHistory(models.Model):
     change_date = fields.Datetime(string='Fecha de cambio', default=fields.Datetime.now)
     version_name = fields.Char(string='Versión', compute='_compute_version_name', store=True)
     version_number = fields.Float(string='Número de versión', digits=(12, 1))
+    change_reason = fields.Char(string='Motivo del cambio')
     
     # Copia de campos relevantes del SO
     currency_id = fields.Many2one('res.currency', 'Moneda', required=True,
@@ -38,9 +39,6 @@ class SaleOrderHistory(models.Model):
     payment_term_id = fields.Many2one('account.payment.term', string='Término de pago')
     pricelist_id = fields.Many2one('product.pricelist', string='Lista de precios')
     
-    # Campos personalizados (ajustar según necesidades)
-    x_campo_personalizado = fields.Char(string='Campo personalizado')
-    
     @api.depends('version_number')
     def _compute_version_name(self):
         for record in self:
@@ -60,7 +58,6 @@ class SaleOrderHistory(models.Model):
             'validity_date': self.validity_date,
             'payment_term_id': self.payment_term_id.id,
             'pricelist_id': self.pricelist_id.id,
-    
         }
         
         original.write(vals)
@@ -93,7 +90,6 @@ class SaleOrderHistory(models.Model):
 class SaleOrderHistoryLine(models.Model):
     _name = 'sale.order.history.line'
     _description = 'Líneas históricas de órdenes de venta'
-    
     history_id = fields.Many2one('sale.order.history', string='Historial', ondelete='cascade')
     product_id = fields.Many2one('product.product', string='Producto')
     product_uom_qty = fields.Float(string='Cantidad')
@@ -137,7 +133,18 @@ class SaleOrder(models.Model):
             # Versiones secundarias (1.1, 1.2, 1.3...)
             return round(self.version + 0.1, 1)
 
-    def _create_history_record(self):
+    def _has_product_changes(self, vals):
+        """Determina si hay cambios relevantes en productos o precios"""
+        if 'order_line' in vals:
+            return True
+        
+        # Verificar cambios en campos relacionados con productos/precios
+        product_related_fields = {
+            'pricelist_id', 'payment_term_id', 'partner_id'
+        }
+        return any(field in vals for field in product_related_fields)
+
+    def _create_history_record(self, change_reason=""):
         """Crea un registro histórico con el estado actual del pedido"""
         history_vals = {
             'original_order_id': self.id,
@@ -149,7 +156,7 @@ class SaleOrder(models.Model):
             'payment_term_id': self.payment_term_id.id,
             'pricelist_id': self.pricelist_id.id,
             'version_number': self.version,
-           
+            'change_reason': change_reason,
         }
         
         history = self.env['sale.order.history'].create(history_vals)
@@ -167,15 +174,32 @@ class SaleOrder(models.Model):
         return history
 
     def write(self, vals):
-        # Crear snapshot antes de guardar cambios si no es una actualización menor
-        if not vals.get('message_follower_ids'):
-            for record in self:
-                record._create_history_record()
+        # Ignorar cambios que no son relevantes (seguimiento, mensajes, etc.)
+        ignored_fields = {
+            'message_follower_ids', 'message_ids', 'activity_ids',
+            'write_date', 'write_uid', '__last_update'
+        }
+        
+        if any(field in vals for field in ignored_fields):
+            return super().write(vals)
+            
+        # Verificar si hay cambios relevantes en productos/precios
+        for record in self:
+            if record._has_product_changes(vals):
+                # Determinar el motivo del cambio
+                change_reason = "Modificación manual"
+                if 'order_line' in vals:
+                    change_reason = "Cambio en líneas de producto"
+                
+                # Crear snapshot antes de guardar cambios
+                record._create_history_record(change_reason)
                 vals['version'] = record._get_next_version_number()
         
         return super().write(vals)
 
     def action_confirm(self):
         res = super().action_confirm()
-        self.version = float(int(self.version) + 1)
+        for order in self:
+            order._create_history_record("Confirmación de orden")
+            order.version = float(int(order.version) + 1)
         return res
