@@ -1,3 +1,0 @@
-id,name,model_id:id,group_id:id,perm_read,perm_write,perm_create,perm_unlink
-access_morosidad_cliente_user,Access morosidad.cliente User,model_morosidad_cliente,base.group_user,1,0,0,0
-access_morosidad_cliente_manager,Access morosidad.cliente Manager,model_morosidad_cliente,account.group_account_manager,1,1,0,1

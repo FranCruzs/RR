@@ -1,1 +1,0 @@
-from . import morosidad_cliente  # ✅ Formato correcto

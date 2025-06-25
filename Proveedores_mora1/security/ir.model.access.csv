@@ -1,3 +1,0 @@
-id,name,model_id:id,group_id:id,perm_read,perm_write,perm_create,perm_unlink
-access_morosidad_proveedor_user,Access morosidad.proveedor User,model_morosidad_proveedor,base.group_user,1,0,0,0
-access_morosidad_proveedor_manager,Access morosidad.proveedor Manager,model_morosidad_proveedor,account.group_account_manager,1,1,1,1
