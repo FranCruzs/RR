@@ -182,8 +182,8 @@ class MorosidadCliente(models.Model):
                     'total': 0.0
                 }
             client_totals[record.partner_id]['records'].append(record)
-            if record.importe_secundario:
-                client_totals[record.partner_id]['total'] += record.importe_secundario
+            if record.amount_residual:
+                client_totals[record.partner_id]['total'] += record.amount_residual
     
         # Ordenar clientes por total de morosidad (de mayor a menor)
         sorted_clients = sorted(client_totals.items(), 
