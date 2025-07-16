@@ -316,7 +316,7 @@ class MorosidadCliente(models.Model):
 
 
     def action_export_to_excel(self):
-        """Genera un reporte Excel de clientes morosos ordenados por mayor deuda."""
+        """Genera un reporte Excel de clientes morosos ordenados por mayor deuda y días de mora."""
         records = self.search([])
         
         if not records:
@@ -453,8 +453,11 @@ class MorosidadCliente(models.Model):
             worksheet.write(row, 6, cliente_mora, total_format)
             row += 1
             
-            # Escribir facturas del cliente
-            for record in invoices:
+            # ORDENAMIENTO CLAVE: Ordenar facturas por días de mora (de mayor a menor)
+            sorted_invoices = sorted(invoices, key=lambda r: r.dias_mora_num or 0, reverse=True)
+            
+            # Escribir facturas del cliente (ordenadas por días de mora)
+            for record in sorted_invoices:
                 worksheet.write(row, 0, partner.name, data_format)
                 worksheet.write(row, 1, record.move_id.name or '', data_format)
                 worksheet.write(row, 2, record.invoice_date.strftime('%d/%m/%Y') if record.invoice_date else '', data_format)
