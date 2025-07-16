@@ -244,8 +244,11 @@ class MorosidadCliente(models.Model):
             ]
             table_data.append(headers)
     
-            # Agregar filas de facturas
-            for record in invoices:
+            # ORDENAMIENTO CLAVE: Ordenar facturas por días de mora (de mayor a menor)
+            sorted_invoices = sorted(invoices, key=lambda r: r.dias_mora_num or 0, reverse=True)
+            
+            # Agregar filas de facturas (ordenadas por días de mora)
+            for record in sorted_invoices:
                 row = [
                     record.move_id.name or '',
                     record.invoice_date.strftime('%d/%m/%Y') if record.invoice_date else '',
