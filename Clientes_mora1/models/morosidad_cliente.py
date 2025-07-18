@@ -17,6 +17,9 @@ from datetime import date
 from odoo import models, fields, api, tools
 from datetime import date
 
+from odoo import models, fields, api, tools
+from datetime import date
+
 class MorosidadCliente(models.Model):
     _name = 'morosidad.cliente'
     _description = 'Reporte de Morosidad de Clientes'
@@ -29,15 +32,26 @@ class MorosidadCliente(models.Model):
     currency_id = fields.Many2one('res.currency', string='Moneda')
     amount_total = fields.Char(string='Total Factura')
     importe_secundario = fields.Monetary(string='Importe en Pesos')
-    amount_residual = fields.Monetary(string='Saldo Pendiente', currency_field='currency_id')
-    
+
+    # Saldo pendiente especificado en PESOS
+    currency_ars_id = fields.Many2one(
+        'res.currency', string='Moneda ARS', compute='_compute_currency_ars', store=False
+    )
+    amount_residual = fields.Monetary(
+        string='Saldo Pendiente', currency_field='currency_ars_id'
+    )
+
+    amount_residual_secundario = fields.Monetary(
+        string='Saldo Pendiente en Pesos'
+    )  # Nuevo campo (se mantiene)
+
     # Campos calculados para días
     dias_mora_num = fields.Integer(compute='_compute_dias', store=False)
     dias_transcurridos_num = fields.Integer(compute='_compute_dias', store=False)
     dias_mora = fields.Char(string='Días de Mora', compute='_compute_dias', store=False)
     dias_transcurridos = fields.Char(string='Días Transcurridos', compute='_compute_dias', store=False)
     esta_vencida = fields.Boolean(string='¿Está Vencida?', compute='_compute_dias', store=False)
-    
+
     # Campos relacionados
     salesman_id = fields.Many2one('res.users', string='Vendedor')
     invoice_payment_term_id = fields.Many2one('account.payment.term', string='Condición de Pago')
@@ -46,8 +60,15 @@ class MorosidadCliente(models.Model):
         ('partial', 'Parcialmente Pagado'),
         ('paid', 'Pagado'),
         ('invoicing', 'Facturación'),
-        ('reversed', 'Revertido')], 
-        string='Estado de Pago')
+        ('reversed', 'Revertido')],
+        string='Estado de Pago'
+    )
+
+    @api.depends()
+    def _compute_currency_ars(self):
+        moneda_ars = self.env.ref('base.ARS')  # Asegurate de tener la moneda ARS configurada
+        for record in self:
+            record.currency_ars_id = moneda_ars
 
     @api.depends('invoice_date', 'invoice_date_due')
     def _compute_dias(self):
@@ -57,7 +78,7 @@ class MorosidadCliente(models.Model):
             record.dias_mora_num = 0
             record.dias_mora = "No vencida"
             record.esta_vencida = False
-            
+
             # Calcular días de mora si está vencida
             if record.invoice_date_due:
                 dias_mora = (today - record.invoice_date_due).days
@@ -67,7 +88,7 @@ class MorosidadCliente(models.Model):
                     record.esta_vencida = True
                 else:
                     record.dias_mora = f"Vence en {-dias_mora} días"
-            
+
             # Calcular días transcurridos desde emisión
             if record.invoice_date:
                 dias_transcurridos = (today - record.invoice_date).days
@@ -103,14 +124,19 @@ class MorosidadCliente(models.Model):
                     WHEN m.move_type = 'out_refund' THEN -m.amount_total_signed
                     ELSE m.amount_total_signed
                 END AS importe_secundario,
-                -- Saldo pendiente
+                -- Saldo pendiente en PESOS (amount_residual_signed)
                 CASE
-                    WHEN m.move_type = 'out_refund' THEN -m.amount_residual
-                    ELSE m.amount_residual
+                    WHEN m.move_type = 'out_refund' THEN -m.amount_residual_signed
+                    ELSE m.amount_residual_signed
                 END AS amount_residual,
+                -- Saldo pendiente en moneda secundaria (también en pesos, pero lo conservás separado)
+                CASE
+                    WHEN m.move_type = 'out_refund' THEN -m.amount_residual_signed
+                    ELSE m.amount_residual_signed
+                END AS amount_residual_secundario,
                 m.invoice_user_id AS salesman_id,
                 m.invoice_payment_term_id,
-                m.payment_state  -- Este campo estaba faltando en la consulta original
+                m.payment_state
             FROM
                 account_move m
             JOIN
@@ -125,6 +151,7 @@ class MorosidadCliente(models.Model):
                 m.amount_residual DESC
         """.format(table=self._table)
         self.env.cr.execute(query)
+
         
     def action_export_to_pdf(self):
         """Genera un reporte PDF de clientes morosos ordenados por mayor deuda."""
@@ -414,8 +441,8 @@ class MorosidadCliente(models.Model):
                     'total': 0.0
                 }
             client_totals[record.partner_id]['records'].append(record)
-            if record.importe_secundario:
-                client_totals[record.partner_id]['total'] += record.importe_secundario
+            if record.amount_residual:
+                client_totals[record.partner_id]['total'] += record.amount_residual
         
         # Ordenar clientes por total de morosidad (de mayor a menor)
         sorted_clients = sorted(client_totals.items(), 
