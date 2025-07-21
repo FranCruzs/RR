@@ -26,24 +26,28 @@ class MorosidadCliente(models.Model):
     _auto = False
 
     partner_id = fields.Many2one('res.partner', string='Cliente')
-    move_id = fields.Many2one('account.move', string='Factura')
-    invoice_date = fields.Date(string='Fecha Factura')
+    move_id = fields.Many2one('account.move', string='Documento')
+    move_type = fields.Selection([
+        ('out_invoice', 'Factura'),
+        ('out_refund', 'Nota de Crédito')],
+        string='Tipo', readonly=True
+    )
+    invoice_date = fields.Date(string='Fecha Documento')
     invoice_date_due = fields.Date(string='Fecha Vencimiento')
     currency_id = fields.Many2one('res.currency', string='Moneda')
-    amount_total = fields.Char(string='Total Factura')
+    amount_total = fields.Char(string='Total Documento')
     importe_secundario = fields.Monetary(string='Importe en Pesos')
 
-    # Saldo pendiente especificado en PESOS
+    # Saldo pendiente
     currency_ars_id = fields.Many2one(
         'res.currency', string='Moneda ARS', compute='_compute_currency_ars', store=False
     )
     amount_residual = fields.Monetary(
         string='Saldo Pendiente', currency_field='currency_ars_id'
     )
-
     amount_residual_secundario = fields.Monetary(
         string='Saldo Pendiente en Pesos'
-    )  # Nuevo campo (se mantiene)
+    )
 
     # Campos calculados para días
     dias_mora_num = fields.Integer(compute='_compute_dias', store=False)
@@ -66,7 +70,7 @@ class MorosidadCliente(models.Model):
 
     @api.depends()
     def _compute_currency_ars(self):
-        moneda_ars = self.env.ref('base.ARS')  # Asegurate de tener la moneda ARS configurada
+        moneda_ars = self.env.ref('base.ARS')
         for record in self:
             record.currency_ars_id = moneda_ars
 
@@ -74,12 +78,10 @@ class MorosidadCliente(models.Model):
     def _compute_dias(self):
         today = date.today()
         for record in self:
-            # Inicializar valores
             record.dias_mora_num = 0
             record.dias_mora = "No vencida"
             record.esta_vencida = False
 
-            # Calcular días de mora si está vencida
             if record.invoice_date_due:
                 dias_mora = (today - record.invoice_date_due).days
                 if dias_mora > 0:
@@ -89,7 +91,6 @@ class MorosidadCliente(models.Model):
                 else:
                     record.dias_mora = f"Vence en {-dias_mora} días"
 
-            # Calcular días transcurridos desde emisión
             if record.invoice_date:
                 dias_transcurridos = (today - record.invoice_date).days
                 record.dias_transcurridos_num = dias_transcurridos
@@ -97,7 +98,6 @@ class MorosidadCliente(models.Model):
 
     @api.model
     def init(self):
-        """Ejecuta consulta SQL para llenar el modelo virtual."""
         tools.drop_view_if_exists(self.env.cr, self._table)
         query = """
             CREATE OR REPLACE VIEW {table} AS
@@ -105,10 +105,11 @@ class MorosidadCliente(models.Model):
                 row_number() OVER () AS id,
                 p.id AS partner_id,
                 m.id AS move_id,
+                m.move_type,
                 m.invoice_date,
                 m.invoice_date_due,
                 m.currency_id,
-                -- Importe formateado correctamente
+                -- Importe formateado mostrando negativo para notas de crédito
                 REGEXP_REPLACE(
                     TO_CHAR(
                         CASE 
@@ -119,17 +120,17 @@ class MorosidadCliente(models.Model):
                     ), 
                     ',', '.', 'g'
                 ) AS amount_total,
-                -- Importe en moneda secundaria (pesos)
+                -- Importe en moneda secundaria (con signo correcto)
                 CASE
                     WHEN m.move_type = 'out_refund' THEN -m.amount_total_signed
                     ELSE m.amount_total_signed
                 END AS importe_secundario,
-                -- Saldo pendiente en PESOS (amount_residual_signed)
+                -- Saldo pendiente (mostrando negativo para notas de crédito)
                 CASE
-                    WHEN m.move_type = 'out_refund' THEN -m.amount_residual_signed
-                    ELSE m.amount_residual_signed
+                    WHEN m.move_type = 'out_refund' THEN -m.amount_residual
+                    ELSE m.amount_residual
                 END AS amount_residual,
-                -- Saldo pendiente en moneda secundaria (también en pesos, pero lo conservás separado)
+                -- Saldo pendiente en moneda secundaria (con signo correcto)
                 CASE
                     WHEN m.move_type = 'out_refund' THEN -m.amount_residual_signed
                     ELSE m.amount_residual_signed
@@ -142,16 +143,21 @@ class MorosidadCliente(models.Model):
             JOIN
                 res_partner p ON m.partner_id = p.id
             WHERE
-                m.move_type IN ('out_invoice', 'out_refund')  -- Facturas y notas de crédito
-                AND m.state = 'posted'  -- Solo facturas validadas
-                AND (m.amount_residual > 0 OR m.payment_state IN ('not_paid', 'partial'))
+                m.move_type IN ('out_invoice', 'out_refund')
+                AND m.state = 'posted'
+                AND (
+                    -- Mostrar facturas con saldo pendiente
+                    (m.move_type = 'out_invoice' AND (m.amount_residual > 0 OR m.payment_state IN ('not_paid', 'partial')))
+                    OR
+                    -- Mostrar TODAS las notas de crédito (incluso las pagadas)
+                    (m.move_type = 'out_refund')
+                )
             ORDER BY 
+                p.name,
                 CASE WHEN m.invoice_date_due IS NULL THEN 0 ELSE 1 END,
-                m.invoice_date_due,
-                m.amount_residual DESC
+                m.invoice_date_due
         """.format(table=self._table)
         self.env.cr.execute(query)
-
         
     def action_export_to_pdf(self):
         """Genera un reporte PDF de clientes morosos ordenados por mayor deuda."""
@@ -341,191 +347,192 @@ class MorosidadCliente(models.Model):
             'target': 'self',
         }
 
-
+    
     def action_export_to_excel(self):
-        """Genera un reporte Excel de clientes morosos ordenados por mayor deuda y días de mora."""
-        records = self.search([])
-        
-        if not records:
-            raise UserError("No hay registros de morosidad para exportar.")
-        
-        # Crear buffer para el Excel
-        excel_buffer = io.BytesIO()
-        
-        # Crear libro de Excel
-        workbook = xlsxwriter.Workbook(excel_buffer, {
-            'in_memory': True,
-            'strings_to_numbers': True
-        })
-        
-        # Formato para encabezados
-        header_format = workbook.add_format({
-            'bold': True,
-            'font_color': 'white',
-            'bg_color': '#4472C4',
-            'align': 'center',
-            'valign': 'vcenter',
-            'border': 1,
-            'font_size': 10
-        })
-        
-        # Formato para datos
-        data_format = workbook.add_format({
-            'border': 1,
-            'align': 'center',
-            'valign': 'vcenter',
-            'font_size': 9
-        })
-        
-        # Formato para montos (alineación derecha)
-        amount_format = workbook.add_format({
-            'border': 1,
-            'align': 'right',
-            'valign': 'vcenter',
-            'font_size': 9,
-            'num_format': '#,##0.00'
-        })
-        
-        # Formato para totales
-        total_format = workbook.add_format({
-            'bold': True,
-            'border': 1,
-            'align': 'right',
-            'valign': 'vcenter',
-            'font_size': 9,
-            'num_format': '#,##0.00'
-        })
-        
-        # Crear hoja de cálculo
-        worksheet = workbook.add_worksheet('Morosidad Clientes')
-        
-        # Configurar anchos de columnas
-        worksheet.set_column('A:A', 20)  # Cliente
-        worksheet.set_column('B:B', 15)  # Factura
-        worksheet.set_column('C:C', 12)  # Fecha Factura
-        worksheet.set_column('D:D', 12)  # Fecha Vencimiento
-        worksheet.set_column('E:E', 10)  # Moneda
-        worksheet.set_column('F:F', 15)  # Importe Principal
-        worksheet.set_column('G:G', 15)  # Importe Secundario
-        worksheet.set_column('H:H', 15)  # Saldo Pendiente
-        worksheet.set_column('I:I', 12)  # Días de Mora
-        worksheet.set_column('J:J', 12)  # Días Transcurridos
-        worksheet.set_column('K:K', 20)  # Vendedor
-        worksheet.set_column('L:L', 20)  # Condición de Pago
-        
-        # Escribir título
-        today = fields.Date.context_today(self)
-        title = f"Reporte de Morosidad de Clientes - Generado el {today}"
-        worksheet.merge_range('A1:L1', title, workbook.add_format({
-            'bold': True,
-            'font_size': 14,
-            'align': 'center'
-        }))
-        
-        # Escribir encabezados
-        headers = [
-            'Cliente', 'Factura', 'F. Factura', 'F. Vencimiento',
-            'Moneda', 'Imp. Principal', 'Imp. Secundario (ARS)', 
-            'Saldo Pendiente', 'Días Mora', 'Días Transcurridos',
-            'Vendedor', 'Condición de Pago'
-        ]
-        
-        worksheet.write_row(2, 0, headers, header_format)
-        
-        # Agrupar registros por cliente y calcular total por cliente
-        client_totals = {}
-        for record in records:
-            if record.partner_id not in client_totals:
-                client_totals[record.partner_id] = {
-                    'records': [],
-                    'total': 0.0
-                }
-            client_totals[record.partner_id]['records'].append(record)
-            if record.amount_residual:
-                client_totals[record.partner_id]['total'] += record.amount_residual
-        
-        # Ordenar clientes por total de morosidad (de mayor a menor)
-        sorted_clients = sorted(client_totals.items(), 
-                              key=lambda x: x[1]['total'], 
-                              reverse=True)
-        
-        # Contador de fila (empezamos en la fila 3 porque 0-2 son para títulos y encabezados)
-        row = 3
-        
-        # Total general de morosidad
-        total_general = 0.0
-        
-        # Escribir datos para cada cliente
-        for partner, data in sorted_clients:
-            invoices = data['records']
-            cliente_mora = data['total']
-            total_general += cliente_mora
+            """Genera un reporte Excel de clientes morosos ordenados por mayor deuda y días de mora."""
+            records = self.search([])
             
-            # Escribir nombre del cliente (merge 12 columnas)
-            worksheet.merge_range(row, 0, row, 11, 
-                                 f"CLIENTE: {partner.name}", 
-                                 workbook.add_format({
-                                     'bold': True,
-                                     'bg_color': '#EFF2F7',
-                                     'border': 1
-                                 }))
-            row += 1
+            if not records:
+                raise UserError("No hay registros de morosidad para exportar.")
             
-            # Escribir total morosidad del cliente
-            worksheet.write(row, 0, "Total Morosidad:", workbook.add_format({
+            # Crear buffer para el Excel
+            excel_buffer = io.BytesIO()
+            
+            # Crear libro de Excel
+            workbook = xlsxwriter.Workbook(excel_buffer, {
+                'in_memory': True,
+                'strings_to_numbers': True
+            })
+            
+            # Formato para encabezados
+            header_format = workbook.add_format({
+                'bold': True,
+                'font_color': 'white',
+                'bg_color': '#4472C4',
+                'align': 'center',
+                'valign': 'vcenter',
+                'border': 1,
+                'font_size': 10
+            })
+            
+            # Formato para datos
+            data_format = workbook.add_format({
+                'border': 1,
+                'align': 'center',
+                'valign': 'vcenter',
+                'font_size': 9
+            })
+            
+            # Formato para montos (alineación derecha)
+            amount_format = workbook.add_format({
+                'border': 1,
+                'align': 'right',
+                'valign': 'vcenter',
+                'font_size': 9,
+                'num_format': '#,##0.00'
+            })
+            
+            # Formato para totales
+            total_format = workbook.add_format({
+                'bold': True,
+                'border': 1,
+                'align': 'right',
+                'valign': 'vcenter',
+                'font_size': 9,
+                'num_format': '#,##0.00'
+            })
+            
+            # Crear hoja de cálculo
+            worksheet = workbook.add_worksheet('Morosidad Clientes')
+            
+            # Configurar anchos de columnas
+            worksheet.set_column('A:A', 20)  # Cliente
+            worksheet.set_column('B:B', 15)  # Factura
+            worksheet.set_column('C:C', 12)  # Fecha Factura
+            worksheet.set_column('D:D', 12)  # Fecha Vencimiento
+            worksheet.set_column('E:E', 10)  # Moneda
+            worksheet.set_column('F:F', 15)  # Importe Principal
+            worksheet.set_column('G:G', 15)  # Importe Secundario
+            worksheet.set_column('H:H', 15)  # Saldo Pendiente
+            worksheet.set_column('I:I', 12)  # Días de Mora
+            worksheet.set_column('J:J', 12)  # Días Transcurridos
+            worksheet.set_column('K:K', 20)  # Vendedor
+            worksheet.set_column('L:L', 20)  # Condición de Pago
+            
+            # Escribir título
+            today = fields.Date.context_today(self)
+            title = f"Reporte de Morosidad de Clientes - Generado el {today}"
+            worksheet.merge_range('A1:L1', title, workbook.add_format({
+                'bold': True,
+                'font_size': 14,
+                'align': 'center'
+            }))
+            
+            # Escribir encabezados
+            headers = [
+                'Cliente', 'Factura', 'F. Factura', 'F. Vencimiento',
+                'Moneda', 'Imp. Principal', 'Imp. Secundario (ARS)', 
+                'Saldo Pendiente', 'Días Mora', 'Días Transcurridos',
+                'Vendedor', 'Condición de Pago'
+            ]
+            
+            worksheet.write_row(2, 0, headers, header_format)
+            
+            # Agrupar registros por cliente y calcular total por cliente
+            client_totals = {}
+            for record in records:
+                if record.partner_id not in client_totals:
+                    client_totals[record.partner_id] = {
+                        'records': [],
+                        'total': 0.0
+                    }
+                client_totals[record.partner_id]['records'].append(record)
+                if record.amount_residual:
+                    client_totals[record.partner_id]['total'] += record.amount_residual
+            
+            # Ordenar clientes por total de morosidad (de mayor a menor)
+            sorted_clients = sorted(client_totals.items(), 
+                                  key=lambda x: x[1]['total'], 
+                                  reverse=True)
+            
+            # Contador de fila (empezamos en la fila 3 porque 0-2 son para títulos y encabezados)
+            row = 3
+            
+            # Total general de morosidad
+            total_general = 0.0
+            
+            # Escribir datos para cada cliente
+            for partner, data in sorted_clients:
+                invoices = data['records']
+                cliente_mora = data['total']
+                total_general += cliente_mora
+                
+                # Escribir nombre del cliente (merge 12 columnas)
+                worksheet.merge_range(row, 0, row, 11, 
+                                     f"CLIENTE: {partner.name}", 
+                                     workbook.add_format({
+                                         'bold': True,
+                                         'bg_color': '#EFF2F7',
+                                         'border': 1
+                                     }))
+                row += 1
+                
+                # Escribir total morosidad del cliente
+                worksheet.write(row, 0, "Total Morosidad:", workbook.add_format({
+                    'bold': True,
+                    'align': 'right',
+                    'border': 1
+                }))
+                worksheet.write(row, 6, cliente_mora, total_format)
+                row += 1
+                
+                # ORDENAMIENTO CLAVE: Ordenar facturas por días de mora (de mayor a menor)
+                sorted_invoices = sorted(invoices, key=lambda r: r.dias_mora_num or 0, reverse=True)
+                
+                # Escribir facturas del cliente (ordenadas por días de mora)
+                for record in sorted_invoices:
+                    worksheet.write(row, 0, partner.name, data_format)
+                    worksheet.write(row, 1, record.move_id.name or '', data_format)
+                    worksheet.write(row, 2, record.invoice_date.strftime('%d/%m/%Y') if record.invoice_date else '', data_format)
+                    worksheet.write(row, 3, record.invoice_date_due.strftime('%d/%m/%Y') if record.invoice_date_due else '', data_format)
+                    worksheet.write(row, 4, record.currency_id.name or '', data_format)
+                    worksheet.write(row, 5, record.amount_total or '', data_format)
+                    worksheet.write(row, 6, record.importe_secundario or 0.0, amount_format)
+                    worksheet.write(row, 7, record.amount_residual or 0.0, amount_format)
+                    worksheet.write(row, 8, record.dias_mora_num or 0, data_format)
+                    worksheet.write(row, 9, record.dias_transcurridos_num or 0, data_format)
+                    worksheet.write(row, 10, record.salesman_id.name or '', data_format)
+                    worksheet.write(row, 11, record.invoice_payment_term_id.name or '', data_format)
+                    row += 1
+                
+                # Espacio entre clientes
+                row += 1
+            
+            # Escribir total general
+            worksheet.write(row, 0, "TOTAL GENERAL MOROSIDAD:", workbook.add_format({
                 'bold': True,
                 'align': 'right',
                 'border': 1
             }))
-            worksheet.write(row, 6, cliente_mora, total_format)
-            row += 1
+            worksheet.write(row, 6, total_general, total_format)
             
-            # ORDENAMIENTO CLAVE: Ordenar facturas por días de mora (de mayor a menor)
-            sorted_invoices = sorted(invoices, key=lambda r: r.dias_mora_num or 0, reverse=True)
+            # Cerrar libro de Excel
+            workbook.close()
+            excel_buffer.seek(0)
             
-            # Escribir facturas del cliente (ordenadas por días de mora)
-            for record in sorted_invoices:
-                worksheet.write(row, 0, partner.name, data_format)
-                worksheet.write(row, 1, record.move_id.name or '', data_format)
-                worksheet.write(row, 2, record.invoice_date.strftime('%d/%m/%Y') if record.invoice_date else '', data_format)
-                worksheet.write(row, 3, record.invoice_date_due.strftime('%d/%m/%Y') if record.invoice_date_due else '', data_format)
-                worksheet.write(row, 4, record.currency_id.name or '', data_format)
-                worksheet.write(row, 5, record.amount_total or '', data_format)
-                worksheet.write(row, 6, record.importe_secundario or 0.0, amount_format)
-                worksheet.write(row, 7, record.amount_residual or 0.0, amount_format)
-                worksheet.write(row, 8, record.dias_mora_num or 0, data_format)
-                worksheet.write(row, 9, record.dias_transcurridos_num or 0, data_format)
-                worksheet.write(row, 10, record.salesman_id.name or '', data_format)
-                worksheet.write(row, 11, record.invoice_payment_term_id.name or '', data_format)
-                row += 1
+            # Crear attachment
+            attachment = self.env['ir.attachment'].create({
+                'name': 'Reporte_Morosidad_Clientes.xlsx',
+                'type': 'binary',
+                'datas': base64.b64encode(excel_buffer.read()),
+                'store_fname': 'Reporte_Morosidad_Clientes.xlsx',
+                'res_model': self._name,
+                'mimetype': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+            })
             
-            # Espacio entre clientes
-            row += 1
-        
-        # Escribir total general
-        worksheet.write(row, 0, "TOTAL GENERAL MOROSIDAD:", workbook.add_format({
-            'bold': True,
-            'align': 'right',
-            'border': 1
-        }))
-        worksheet.write(row, 6, total_general, total_format)
-        
-        # Cerrar libro de Excel
-        workbook.close()
-        excel_buffer.seek(0)
-        
-        # Crear attachment
-        attachment = self.env['ir.attachment'].create({
-            'name': 'Reporte_Morosidad_Clientes.xlsx',
-            'type': 'binary',
-            'datas': base64.b64encode(excel_buffer.read()),
-            'store_fname': 'Reporte_Morosidad_Clientes.xlsx',
-            'res_model': self._name,
-            'mimetype': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
-        })
-        
-        return {
-            'type': 'ir.actions.act_url',
-            'url': '/web/content/%s?download=true' % attachment.id,
-            'target': 'self',
-        }
+            return {
+                    'type': 'ir.actions.act_url',
+                    'url': '/web/content/%s?download=true' % attachment.id,
+                    'target': 'self',
+                }
+      
